@@ -58,15 +58,12 @@ async function joinRoom(ws, token) {
     }
   });
 }
-
+const playerspeed = 8;
 function broadcast(room, message) {
   for (const [playerId, player] of room.players) {
     player.ws.send(JSON.stringify({ ...message, playerId }));
   }
 }
-
-const playerspeed = 2;
-const movementInterval = 10;
 
 wss.on('connection', (ws, req) => {
   const token = req.url.slice(1);
@@ -75,50 +72,39 @@ wss.on('connection', (ws, req) => {
     .then((result) => {
       if (result) {
         console.log('Joined room:', result);
-
-        let lastMovementTime = Date.now();
-
         ws.on('message', (message) => {
           try {
             const data = JSON.parse(message);
             if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
-              const currentTime = Date.now();
-
-              // Check if enough time has passed since the last movement
-              if (currentTime - lastMovementTime >= movementInterval) {
-                const player = result.room.players.get(result.playerId);
-                if (player) {
-                  // Update the player's position on the server side
-                  switch (data.direction) {
-                    case 'left':
-                      player.x -= playerspeed;
-                      break;
-                    case 'right':
-                      player.x += playerspeed;
-                      break;
-                    case 'up':
-                      player.y -= playerspeed;
-                      break;
-                    case 'down':
-                      player.y += playerspeed;
-                      break;
-                  }
-
-                  // Save the previous position for reconciliation
-                  player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
-                  player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
-
-                  // Update the last movement time
-                  lastMovementTime = currentTime;
-
-                  // Send the movement to other players
-                  broadcast(result.room, {
-                    type: 'movement',
-                    playerId: result.playerId,
-                    x: player.x,
-                    y: player.y,
-                  });
+              const player = result.room.players.get(result.playerId);
+              if (player) {
+                // Update the player's position on the client side
+                switch (data.direction) {
+                  case 'left':
+                    player.x -= playerspeed;
+                    break;
+                  case 'right':
+                    player.x += playerspeed;
+                    break;
+                  case 'up':
+                    player.y -= playerspeed;
+                    break;
+                  case 'down':
+                    player.y += playerspeed;
+                    break;
                 }
+
+                // Save the previous position for reconciliation
+                player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
+                player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
+
+                // Send the movement to other players
+                broadcast(result.room, {
+                  type: 'movement',
+                  playerId: result.playerId,
+                  x: player.x,
+                  y: player.y,
+                });
               }
             }
           } catch (error) {
