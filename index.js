@@ -58,18 +58,31 @@ async function joinRoom(ws, token) {
     }
   });
 }
-const playerspeed = 8;
+
 function broadcast(room, message) {
   for (const [playerId, player] of room.players) {
     player.ws.send(JSON.stringify({ ...message, playerId }));
   }
 }
 
-const moveCooldown = 10; // 10 milliseconds
-function canMove(room) {
-  const currentTime = Date.now();
-  const lastMoveTime = Math.min(...Array.from(room.players.values(), (player) => player.lastMoveTime), currentTime);
-  return currentTime - lastMoveTime >= moveCooldown;
+const moveInterval = 10; // 10 milliseconds
+const playerspeed = 8;
+
+function updatePlayerPosition(player, direction) {
+  switch (direction) {
+    case 'left':
+      player.x -= playerspeed;
+      break;
+    case 'right':
+      player.x += playerspeed;
+      break;
+    case 'up':
+      player.y -= playerspeed;
+      break;
+    case 'down':
+      player.y += playerspeed;
+      break;
+  }
 }
 
 wss.on('connection', (ws, req) => {
@@ -79,50 +92,57 @@ wss.on('connection', (ws, req) => {
     .then((result) => {
       if (result) {
         console.log('Joined room:', result);
+
+        // Accumulate movements for each player
+        const movements = new Map();
+
         ws.on('message', (message) => {
           try {
             const data = JSON.parse(message);
             if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
-              const player = result.room.players.get(result.playerId);
-              if (player && canMove(result.room)) {
-                // Update the player's position on the client side
-                switch (data.direction) {
-                  case 'left':
-                    player.x -= playerspeed;
-                    break;
-                  case 'right':
-                    player.x += playerspeed;
-                    break;
-                  case 'up':
-                    player.y -= playerspeed;
-                    break;
-                  case 'down':
-                    player.y += playerspeed;
-                    break;
-                }
+              const playerId = result.playerId;
 
-                // Save the previous position for reconciliation
-                player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
-                player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
-
-                // Update last move time for all players
-                result.room.players.forEach((otherPlayer) => {
-                  otherPlayer.lastMoveTime = Date.now();
-                });
-
-                // Send the movement to other players
-                broadcast(result.room, {
-                  type: 'movement',
-                  playerId: result.playerId,
-                  x: player.x,
-                  y: player.y,
-                });
+              if (!movements.has(playerId)) {
+                movements.set(playerId, []);
               }
+
+              movements.get(playerId).push(data.direction);
             }
           } catch (error) {
             console.error('Error parsing message:', error);
           }
         });
+
+        setInterval(() => {
+          if (canMove(result.room)) {
+            // Process accumulated movements for all players
+            movements.forEach((directions, playerId) => {
+              const player = result.room.players.get(playerId);
+
+              if (player) {
+                // Update the player's position based on accumulated movements
+                directions.forEach((direction) => {
+                  updatePlayerPosition(player, direction);
+                });
+
+                // Save the previous position for reconciliation
+                player.prevX = player.x;
+                player.prevY = player.y;
+
+                // Send the movement to other players
+                broadcast(result.room, {
+                  type: 'movement',
+                  playerId,
+                  x: player.x,
+                  y: player.y,
+                });
+              }
+            });
+
+            // Clear accumulated movements
+            movements.clear();
+          }
+        }, moveInterval);
 
         ws.on('close', () => {
           result.room.players.delete(result.playerId);
@@ -135,6 +155,7 @@ wss.on('connection', (ws, req) => {
       console.error('Error joining room:', error);
     });
 });
+
 
 server.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (ws) => {
