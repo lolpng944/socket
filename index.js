@@ -65,6 +65,13 @@ function broadcast(room, message) {
   }
 }
 
+const moveCooldown = 10; // 10 milliseconds
+function canMove(room) {
+  const currentTime = Date.now();
+  const lastMoveTime = Math.min(...Array.from(room.players.values(), (player) => player.lastMoveTime), currentTime);
+  return currentTime - lastMoveTime >= moveCooldown;
+}
+
 wss.on('connection', (ws, req) => {
   const token = req.url.slice(1);
 
@@ -77,7 +84,7 @@ wss.on('connection', (ws, req) => {
             const data = JSON.parse(message);
             if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
               const player = result.room.players.get(result.playerId);
-              if (player) {
+              if (player && canMove(result.room)) {
                 // Update the player's position on the client side
                 switch (data.direction) {
                   case 'left':
@@ -97,6 +104,11 @@ wss.on('connection', (ws, req) => {
                 // Save the previous position for reconciliation
                 player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
                 player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
+
+                // Update last move time for all players
+                result.room.players.forEach((otherPlayer) => {
+                  otherPlayer.lastMoveTime = Date.now();
+                });
 
                 // Send the movement to other players
                 broadcast(result.room, {
