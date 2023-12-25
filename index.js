@@ -65,7 +65,7 @@ function broadcast(room, message) {
   }
 }
 
-const playerspeed = 8;
+const playerspeed = 2;
 const movementInterval = 10;
 
 wss.on('connection', (ws, req) => {
