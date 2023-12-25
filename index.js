@@ -1,12 +1,17 @@
 const WebSocket = require('ws');
 const http = require('http');
 const axios = require('axios');
+const Limiter = require('limiter').RateLimiter;
 
 const server = http.createServer();
 const wss = new WebSocket.Server({ noServer: true });
 
 const rooms = new Map();
 let nextPlayerId = 1;
+
+const rate = 1;
+const burst = 5;
+const tokenBucket = new Limiter({ tokensPerInterval: rate, interval: 'sec', maxBurst: burst });
 
 function createRoom(roomId) {
   const room = {
@@ -58,7 +63,10 @@ async function joinRoom(ws, token) {
     }
   });
 }
+
 const playerspeed = 8;
+const inputThrottleInterval = 20; // Ein Intervall von 100 Millisekunden zwischen aufeinanderfolgenden Anfragen
+
 function broadcast(room, message) {
   for (const [playerId, player] of room.players) {
     player.ws.send(JSON.stringify({ ...message, playerId }));
@@ -68,60 +76,82 @@ function broadcast(room, message) {
 wss.on('connection', (ws, req) => {
   const token = req.url.slice(1);
 
-  joinRoom(ws, token)
-    .then((result) => {
-      if (result) {
-        console.log('Joined room:', result);
-        ws.on('message', (message) => {
-          try {
-            const data = JSON.parse(message);
-            if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
-              const player = result.room.players.get(result.playerId);
-              if (player) {
-                // Update the player's position on the client side
-                switch (data.direction) {
-                  case 'left':
-                    player.x -= playerspeed;
-                    break;
-                  case 'right':
-                    player.x += playerspeed;
-                    break;
-                  case 'up':
-                    player.y -= playerspeed;
-                    break;
-                  case 'down':
-                    player.y += playerspeed;
-                    break;
+  if (tokenBucket.tryRemoveTokens(1)) {
+    joinRoom(ws, token)
+      .then((result) => {
+        if (result) {
+          console.log('Joined room:', result);
+
+          const lastProcessedTimestamps = {
+            left: 0,
+            right: 0,
+            up: 0,
+            down: 0,
+          };
+
+          const handleRequest = (result, message) => {
+            try {
+              const data = JSON.parse(message);
+              if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
+                const player = result.room.players.get(result.playerId);
+                if (player) {
+                  const currentTimestamp = Date.now();
+
+                  // Prüfen, ob das Zeitintervall für die nächste Anfrage abgelaufen ist
+                  if (currentTimestamp - lastProcessedTimestamps[data.direction] > inputThrottleInterval) {
+                    switch (data.direction) {
+                      case 'left':
+                        player.x -= playerspeed;
+                        break;
+                      case 'right':
+                        player.x += playerspeed;
+                        break;
+                      case 'up':
+                        player.y -= playerspeed;
+                        break;
+                      case 'down':
+                        player.y += playerspeed;
+                        break;
+                    }
+
+                    player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
+                    player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
+
+                    broadcast(result.room, {
+                      type: 'movement',
+                      playerId: result.playerId,
+                      x: player.x,
+                      y: player.y,
+                    });
+
+                    lastProcessedTimestamps[data.direction] = currentTimestamp;
+                  } else {
+                    }
                 }
-
-                // Save the previous position for reconciliation
-                player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
-                player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
-
-                // Send the movement to other players
-                broadcast(result.room, {
-                  type: 'movement',
-                  playerId: result.playerId,
-                  x: player.x,
-                  y: player.y,
-                });
               }
+            } catch (error) {
+              console.error('Error parsing message:', error);
             }
-          } catch (error) {
-            console.error('Error parsing message:', error);
-          }
-        });
+          };
 
-        ws.on('close', () => {
-          result.room.players.delete(result.playerId);
-        });
-      } else {
-        console.error('Failed to join room:', result);
-      }
-    })
-    .catch((error) => {
-      console.error('Error joining room:', error);
-    });
+          ws.on('message', (message) => {
+            handleRequest(result, message);
+          });
+
+          ws.on('close', () => {
+            result.room.players.delete(result.playerId);
+          });
+        } else {
+          console.error('Failed to join room:', result);
+        }
+      })
+      .catch((error) => {
+        console.error('Error joining room:', error);
+      });
+  } else {
+    console.log('Connection rate-limited. Too many connections in a short period.');
+    ws.close(4002, 'Connection rate-limited. Too many connections in a short period.');
+  }
 });
 
 server.on('upgrade', (request, socket, head) => {
