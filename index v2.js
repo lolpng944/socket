@@ -12,6 +12,10 @@ let nextPlayerId = 1;
 const rate = 1;
 const burst = 5;
 const tokenBucket = new Limiter({ tokensPerInterval: rate, interval: 'sec', maxBurst: burst });
+const WORLD_WIDTH = 800; // Set the desired width of the world
+const WORLD_HEIGHT = 600; // Set the desired height of the world
+const playerspeed = 8;
+const inputThrottleInterval = 20;
 
 function createRoom(roomId) {
   const room = {
@@ -64,8 +68,7 @@ async function joinRoom(ws, token) {
   });
 }
 
-const playerspeed = 8;
-const inputThrottleInterval = 20; // Ein Intervall von 100 Millisekunden zwischen aufeinanderfolgenden Anfragen
+
 
 function broadcast(room, message, playerId) {
   const player = room.players.get(playerId);
@@ -100,6 +103,7 @@ wss.on('connection', (ws, req) => {
 
                   // Prüfen, ob das Zeitintervall für die nächste Anfrage abgelaufen ist
                   if (currentTimestamp - lastProcessedTimestamps[data.direction] > inputThrottleInterval) {
+                    // Update player position based on the movement direction
                     switch (data.direction) {
                       case 'left':
                         player.x -= playerspeed;
@@ -115,9 +119,15 @@ wss.on('connection', (ws, req) => {
                         break;
                     }
 
+                    // Ensure the player stays within the world boundaries
+                    player.x = Math.max(-WORLD_WIDTH, Math.min(WORLD_WIDTH, player.x));
+                    player.y = Math.max(-WORLD_HEIGHT, Math.min(WORLD_HEIGHT, player.y));
+
+                    // Update previous positions
                     player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
                     player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
 
+                    // Broadcast the updated position to other players in the room
                     broadcast(result.room, {
                       type: 'movement',
                       x: player.x,
