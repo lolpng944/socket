@@ -12,26 +12,50 @@ let nextPlayerId = 1;
 const rate = 1;
 const burst = 5;
 const tokenBucket = new Limiter({ tokensPerInterval: rate, interval: 'sec', maxBurst: burst });
-const WORLD_WIDTH = 800; // Set the desired width of the world
-const WORLD_HEIGHT = 600; // Set the desired height of the world
-const playerspeed = 8;
+const WORLD_WIDTH = 800;
+const WORLD_HEIGHT = 600;
+const playerspeed = 4;
 const inputThrottleInterval = 20;
-
-const MAX_PLAYERS_PER_ROOM = 5; // Set the desired maximum players per room
 
 function createRoom(roomId) {
   const room = {
     players: new Map(),
   };
   rooms.set(roomId, room);
+  generateRandomCoins(room); // Add this line to generate random coins when creating a room
   return room;
+}
+
+function handleCoinCollected(result, index) {
+  const room = result.room;
+  const playerId = result.playerId;
+
+  // Remove the collected coin
+  room.coins.splice(index, 1);
+  broadcast(room, { type: 'coin_collected', coinIndex: index }, playerId);
+
+  // Generate new coins
+  generateRandomCoins(room);
+}
+
+function generateRandomCoins(room) {
+  const coins = [];
+  for (let i = 0; i < 3; i++) {
+    const coin = {
+      x: Math.floor(Math.random() * (WORLD_WIDTH * 2 + 1)) - WORLD_WIDTH,
+      y: Math.floor(Math.random() * (WORLD_HEIGHT * 2 + 1)) - WORLD_HEIGHT,
+    };
+    coins.push(coin);
+  }
+  room.coins = coins;
+  broadcast(room, { type: 'coins', coins });
 }
 
 async function joinRoom(ws, token) {
   return new Promise(async (resolve, reject) => {
     try {
       const expectedOrigin = 'tw-editor://.';
-      const response = await axios.get(`https://a.nxjxvxgy.repl.co/verify-token/${token}`, {
+      const response = await axios.get(`https://4gy7dw-3000.csb.app/verify-token/${token}`, {
         headers: {
           Origin: expectedOrigin,
         },
@@ -42,7 +66,7 @@ async function joinRoom(ws, token) {
 
       if (response.data.message) {
         for (const [id, currentRoom] of rooms) {
-          if (currentRoom.players.size < MAX_PLAYERS_PER_ROOM) {
+          if (currentRoom.players.size < 2) {
             roomId = id;
             room = currentRoom;
             break;
@@ -70,29 +94,92 @@ async function joinRoom(ws, token) {
   });
 }
 
-function broadcastPlayerList(room, playerId) {
-  const playerList = Array.from(room.players, ([id, player]) => ({
-    playerId: id,
-    x: player.x,
-    y: player.y,
-  }));
-  room.players.forEach((p, id) => {
-    p.ws.send(JSON.stringify({ type: 'playerList', playerList, playerId }));
-  });
-}
-
 function broadcast(room, message, playerId) {
   const player = room.players.get(playerId);
   if (player) {
-    const playerData = Array.from(room.players, ([id, p]) => ({
-      playerId: id,
-      x: p.x,
-      y: p.y,
-    }));
-
-    player.ws.send(JSON.stringify({ ...message, playerData }));
+    const broadcastMessage = {
+      ...message,
+      playerId,
+      coins: room.coins, // Include the positions of the coins in the broadcast
+    };
+    player.ws.send(JSON.stringify(broadcastMessage));
   }
 }
+
+const lastProcessedTimestamps = {
+  left: 0,
+  right: 0,
+  up: 0,
+  down: 0,
+};
+
+
+const handleRequest = (result, message) => {
+  try {
+    const data = JSON.parse(message);
+    if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
+      const player = result.room.players.get(result.playerId);
+      if (player) {
+        const currentTimestamp = Date.now();
+
+        if (currentTimestamp - lastProcessedTimestamps[data.direction] > inputThrottleInterval) {
+          switch (data.direction) {
+            case 'left':
+              player.x -= playerspeed;
+              break;
+            case 'right':
+              player.x += playerspeed;
+              break;
+            case 'up':
+              player.y -= playerspeed;
+              break;
+            case 'down':
+              player.y += playerspeed;
+              break;
+          }
+
+          player.x = Math.max(-WORLD_WIDTH, Math.min(WORLD_WIDTH, player.x));
+          player.y = Math.max(-WORLD_HEIGHT, Math.min(WORLD_HEIGHT, player.y));
+
+          player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
+          player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
+
+          broadcast(result.room, {
+            type: 'movement',
+            x: player.x,
+            y: player.y,
+          }, result.playerId);
+
+          result.room.coins.forEach((coin, index) => {
+            const coinHitboxSize = 20;
+            if (
+              player.x - playerspeed < coin.x + coinHitboxSize &&
+              player.x + playerspeed > coin.x - coinHitboxSize &&
+              player.y - playerspeed < coin.y + coinHitboxSize &&
+              player.y + playerspeed > coin.y - coinHitboxSize
+            ) {
+              handleCoinCollected(result, index);
+              result.room.coins.splice(index, 1);
+              broadcast(result.room, { type: 'coin_collected', coinIndex: index }, result.playerId);
+
+              axios.post('https://example.com/api/increase-coins', { playerId: result.playerId })
+                .then(response => {
+                  console.log('Coins increased successfully:', response.data);
+                })
+                .catch(error => {
+                  console.error('Error increasing coins:', error);
+                });
+            }
+          });
+
+          lastProcessedTimestamps[data.direction] = currentTimestamp;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error parsing message:', error);
+  }
+};
 
 wss.on('connection', (ws, req) => {
   const token = req.url.slice(1);
@@ -110,68 +197,12 @@ wss.on('connection', (ws, req) => {
             down: 0,
           };
 
-          const handleRequest = (result, message, lastTimestamp) => {
-            try {
-              const data = JSON.parse(message);
-              if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
-                const player = result.room.players.get(result.playerId);
-                if (player) {
-                  const currentTimestamp = Date.now();
-                  const dt = (currentTimestamp - lastTimestamp) / 1000; // Convert to seconds
-
-                  if (currentTimestamp - lastProcessedTimestamps[data.direction] > inputThrottleInterval) {
-                    switch (data.direction) {
-                      case 'left':
-                        player.x -= playerspeed * dt;
-                        break;
-                      case 'right':
-                        player.x += playerspeed * dt;
-                        break;
-                      case 'up':
-                        player.y -= playerspeed * dt;
-                        break;
-                      case 'down':
-                        player.y += playerspeed * dt;
-                        break;
-                    }
-
-                    player.x = Math.max(-WORLD_WIDTH, Math.min(WORLD_WIDTH, player.x));
-                    player.y = Math.max(-WORLD_HEIGHT, Math.min(WORLD_HEIGHT, player.y));
-
-                    player.prevX = player.x - (data.direction === 'left' ? playerspeed * dt : data.direction === 'right' ? -playerspeed * dt : 0);
-                    player.prevY = player.y - (data.direction === 'up' ? playerspeed * dt : data.direction === 'down' ? -playerspeed * dt : 0);
-
-                    broadcast(result.room, {
-                      type: 'movement',
-                      x: player.x,
-                      y: player.y,
-                    }, result.playerId);
-
-                    lastProcessedTimestamps[data.direction] = currentTimestamp;
-                  }
-                }
-              }
-            } catch (error) {
-              console.error('Error parsing message:', error);
-            }
-          };
-
-          let lastTimestamp = Date.now();
-
           ws.on('message', (message) => {
-            handleRequest(result, message, lastTimestamp);
-            lastTimestamp = Date.now();
+            handleRequest(result, message);
           });
 
           ws.on('close', () => {
             result.room.players.delete(result.playerId);
-
-            if (result.room.players.size === 0) {
-              console.log('Last player left. Resetting the game or declaring a winner.');
-              // Reset the game or declare a winner
-            } else {
-              broadcastPlayerList(result.room, result.playerId);
-            }
           });
         } else {
           console.error('Failed to join room:', result);
