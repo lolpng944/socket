@@ -25,7 +25,7 @@ const tokenBucket = new Limiter({
 });
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
-const playerspeed = 4;
+const playerspeed = 8;
 const inputThrottleInterval = 20;
 
 function createRoom(roomId) {
@@ -40,29 +40,26 @@ function createRoom(roomId) {
 function handleCoinCollected(result, index) {
   const room = result.room;
   const playerId = result.playerId;
+  const player = room.players.get(playerId);
 
   room.coins.splice(index, 1);
-  broadcast(room, { type: "coin_collected", coinIndex: index }, playerId);
 
-  const player = room.players.get(playerId);
-  if (player) {
-    broadcast(
-      room,
-      {
-        type: "movement",
-        x: player.x,
-        y: player.y,
-      },
-      playerId,
-    );
-  }
-
+  // Broadcast player position and new coins to all players
+  const messages = Array.from(room.players.keys()).map((playerId) => ({
+    type: "movement",
+    x: room.players.get(playerId).x,
+    y: room.players.get(playerId).y,
+    playerId: playerId,
+  }));
+  messages.push({ type: "coins", coins: room.coins });
+  messages.push({ type: "coin_collected", coinIndex: index }, playerId);
+  broadcast(room, messages);
   generateRandomCoins(room);
 }
 
 function generateRandomCoins(room) {
   const coins = [];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 1; i++) {
     const coin = {
       x: Math.floor(Math.random() * (WORLD_WIDTH * 2 + 1)) - WORLD_WIDTH,
       y: Math.floor(Math.random() * (WORLD_HEIGHT * 2 + 1)) - WORLD_HEIGHT,
@@ -83,7 +80,16 @@ function generateRandomCoins(room) {
     );
   });
 
-  broadcast(room, { type: "coins", coins });
+  // Broadcast player positions and new coins to all players
+  broadcast(room, [
+    ...Array.from(room.players.keys()).map((playerId) => ({
+      type: "movement",
+      x: room.players.get(playerId).x,
+      y: room.players.get(playerId).y,
+      playerId: playerId,
+    })),
+    { type: "coins", coins: room.coins },
+  ]);
 }
 
 async function joinRoom(ws, token) {
@@ -268,3 +274,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server is listening on port ${PORT}`);
 });
+
