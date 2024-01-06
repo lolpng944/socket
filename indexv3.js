@@ -1,7 +1,7 @@
-const WebSocket = require('ws');
-const http = require('http');
-const axios = require('axios');
-const Limiter = require('limiter').RateLimiter;
+const WebSocket = require("ws");
+const http = require("http");
+const axios = require("axios");
+const Limiter = require("limiter").RateLimiter;
 
 const server = http.createServer();
 const wss = new WebSocket.Server({ noServer: true });
@@ -9,9 +9,20 @@ const wss = new WebSocket.Server({ noServer: true });
 const rooms = new Map();
 let nextPlayerId = 1;
 
+const lastProcessedTimestamps = {
+  left: 0,
+  right: 0,
+  up: 0,
+  down: 0,
+};
+
 const rate = 1;
 const burst = 5;
-const tokenBucket = new Limiter({ tokensPerInterval: rate, interval: 'sec', maxBurst: burst });
+const tokenBucket = new Limiter({
+  tokensPerInterval: rate,
+  interval: "sec",
+  maxBurst: burst,
+});
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
 const playerspeed = 4;
@@ -22,7 +33,7 @@ function createRoom(roomId) {
     players: new Map(),
   };
   rooms.set(roomId, room);
-  generateRandomCoins(room); // Add this line to generate random coins when creating a room
+  generateRandomCoins(room);
   return room;
 }
 
@@ -30,11 +41,22 @@ function handleCoinCollected(result, index) {
   const room = result.room;
   const playerId = result.playerId;
 
-  // Remove the collected coin
   room.coins.splice(index, 1);
-  broadcast(room, { type: 'coin_collected', coinIndex: index }, playerId);
+  broadcast(room, { type: "coin_collected", coinIndex: index }, playerId);
 
-  // Generate new coins
+  const player = room.players.get(playerId);
+  if (player) {
+    broadcast(
+      room,
+      {
+        type: "movement",
+        x: player.x,
+        y: player.y,
+      },
+      playerId,
+    );
+  }
+
   generateRandomCoins(room);
 }
 
@@ -48,18 +70,34 @@ function generateRandomCoins(room) {
     coins.push(coin);
   }
   room.coins = coins;
-  broadcast(room, { type: 'coins', coins });
+
+  room.players.forEach((player, playerId) => {
+    broadcast(
+      room,
+      {
+        type: "movement",
+        x: player.x,
+        y: player.y,
+      },
+      playerId,
+    );
+  });
+
+  broadcast(room, { type: "coins", coins });
 }
 
 async function joinRoom(ws, token) {
   return new Promise(async (resolve, reject) => {
     try {
-      const expectedOrigin = 'tw-editor://.';
-      const response = await axios.get(`https://4gy7dw-3000.csb.app/verify-token/${token}`, {
-        headers: {
-          Origin: expectedOrigin,
+      const expectedOrigin = "tw-editor://.";
+      const response = await axios.get(
+        `https://4gy7dw-3000.csb.app/verify-token/${token}`,
+        {
+          headers: {
+            Origin: expectedOrigin,
+          },
         },
-      });
+      );
 
       let roomId;
       let room;
@@ -83,13 +121,13 @@ async function joinRoom(ws, token) {
 
         resolve({ roomId, playerId, room });
       } else {
-        ws.close(4001, 'Invalid token');
-        reject('Invalid token');
+        ws.close(4001, "Invalid token");
+        reject("Invalid token");
       }
     } catch (error) {
-      console.error('Error verifying token:', error);
-      ws.close(4000, 'Token verification error');
-      reject('Token verification error');
+      console.error("Error verifying token:", error);
+      ws.close(4000, "Token verification error");
+      reject("Token verification error");
     }
   });
 }
@@ -100,40 +138,38 @@ function broadcast(room, message, playerId) {
     const broadcastMessage = {
       ...message,
       playerId,
-      coins: room.coins, // Include the positions of the coins in the broadcast
+      coins: room.coins,
     };
     player.ws.send(JSON.stringify(broadcastMessage));
   }
 }
 
-const lastProcessedTimestamps = {
-  left: 0,
-  right: 0,
-  up: 0,
-  down: 0,
-};
-
-
 const handleRequest = (result, message) => {
   try {
     const data = JSON.parse(message);
-    if (data.type === 'movement' && ['left', 'right', 'up', 'down'].includes(data.direction)) {
+    if (
+      data.type === "movement" &&
+      ["left", "right", "up", "down"].includes(data.direction)
+    ) {
       const player = result.room.players.get(result.playerId);
       if (player) {
         const currentTimestamp = Date.now();
 
-        if (currentTimestamp - lastProcessedTimestamps[data.direction] > inputThrottleInterval) {
+        if (
+          currentTimestamp - lastProcessedTimestamps[data.direction] >
+          inputThrottleInterval
+        ) {
           switch (data.direction) {
-            case 'left':
+            case "left":
               player.x -= playerspeed;
               break;
-            case 'right':
+            case "right":
               player.x += playerspeed;
               break;
-            case 'up':
+            case "up":
               player.y -= playerspeed;
               break;
-            case 'down':
+            case "down":
               player.y += playerspeed;
               break;
           }
@@ -141,14 +177,30 @@ const handleRequest = (result, message) => {
           player.x = Math.max(-WORLD_WIDTH, Math.min(WORLD_WIDTH, player.x));
           player.y = Math.max(-WORLD_HEIGHT, Math.min(WORLD_HEIGHT, player.y));
 
-          player.prevX = player.x - (data.direction === 'left' ? playerspeed : data.direction === 'right' ? -playerspeed : 0);
-          player.prevY = player.y - (data.direction === 'up' ? playerspeed : data.direction === 'down' ? -playerspeed : 0);
+          player.prevX =
+            player.x -
+            (data.direction === "left"
+              ? playerspeed
+              : data.direction === "right"
+                ? -playerspeed
+                : 0);
+          player.prevY =
+            player.y -
+            (data.direction === "up"
+              ? playerspeed
+              : data.direction === "down"
+                ? -playerspeed
+                : 0);
 
-          broadcast(result.room, {
-            type: 'movement',
-            x: player.x,
-            y: player.y,
-          }, result.playerId);
+          broadcast(
+            result.room,
+            {
+              type: "movement",
+              x: player.x,
+              y: player.y,
+            },
+            result.playerId,
+          );
 
           result.room.coins.forEach((coin, index) => {
             const coinHitboxSize = 20;
@@ -159,16 +211,6 @@ const handleRequest = (result, message) => {
               player.y + playerspeed > coin.y - coinHitboxSize
             ) {
               handleCoinCollected(result, index);
-              result.room.coins.splice(index, 1);
-              broadcast(result.room, { type: 'coin_collected', coinIndex: index }, result.playerId);
-
-              axios.post('https://example.com/api/increase-coins', { playerId: result.playerId })
-                .then(response => {
-                  console.log('Coins increased successfully:', response.data);
-                })
-                .catch(error => {
-                  console.error('Error increasing coins:', error);
-                });
             }
           });
 
@@ -177,49 +219,47 @@ const handleRequest = (result, message) => {
       }
     }
   } catch (error) {
-    console.error('Error parsing message:', error);
+    console.error("Error parsing message:", error);
   }
 };
 
-wss.on('connection', (ws, req) => {
+wss.on("connection", (ws, req) => {
   const token = req.url.slice(1);
 
   if (tokenBucket.tryRemoveTokens(1)) {
     joinRoom(ws, token)
       .then((result) => {
         if (result) {
-          console.log('Joined room:', result);
+          console.log("Joined room:", result);
 
-          const lastProcessedTimestamps = {
-            left: 0,
-            right: 0,
-            up: 0,
-            down: 0,
-          };
-
-          ws.on('message', (message) => {
+          ws.on("message", (message) => {
             handleRequest(result, message);
           });
 
-          ws.on('close', () => {
+          ws.on("close", () => {
             result.room.players.delete(result.playerId);
           });
         } else {
-          console.error('Failed to join room:', result);
+          console.error("Failed to join room:", result);
         }
       })
       .catch((error) => {
-        console.error('Error joining room:', error);
+        console.error("Error joining room:", error);
       });
   } else {
-    console.log('Connection rate-limited. Too many connections in a short period.');
-    ws.close(4002, 'Connection rate-limited. Too many connections in a short period.');
+    console.log(
+      "Connection rate-limited. Too many connections in a short period.",
+    );
+    ws.close(
+      4002,
+      "Connection rate-limited. Too many connections in a short period.",
+    );
   }
 });
 
-server.on('upgrade', (request, socket, head) => {
+server.on("upgrade", (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
+    wss.emit("connection", ws, request);
   });
 });
 
