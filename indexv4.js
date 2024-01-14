@@ -10,8 +10,8 @@ const rooms = new Map();
 let nextPlayerId = 1;
 
 function createRateLimiter() {
-  const rate = 100;
-  const burst = 10;
+  const rate = 120;
+  const burst = 60;
   return new Limiter({
     tokensPerInterval: rate,
     interval: "sec",
@@ -122,16 +122,18 @@ function generateRandomCoins(room) {
   }
   room.coins = coins;
 
-  broadcastPlayerPositions(room);
+  // Broadcast player positions and new coins to all players
+  const messages = [
+    ...Array.from(room.players.keys()).map((playerId) => ({
+      type: "movement",
+      x: room.players.get(playerId).x,
+      y: room.players.get(playerId).y,
+      playerId: playerId,
+    })),
+    { type: "coins", coins: room.coins },
+  ];
 
-  // Broadcast new coins to all players
-  const message = {
-    type: "coins",
-    coins: room.coins,
-  };
-  room.players.forEach((player) => {
-    player.ws.send(JSON.stringify(message));
-  });
+  addToBatch(room, messages);
 }
 
 async function joinRoom(ws, token) {
@@ -257,6 +259,26 @@ function handleRequest(result, message) {
               break;
           }
 
+          // Check if the player is within the radius of any coin
+          const collectedCoins = [];
+          result.room.coins.forEach((coin, index) => {
+            const distance = Math.sqrt(
+              Math.pow(player.x - coin.x, 2) + Math.pow(player.y - coin.y, 2),
+            );
+
+            if (distance <= 60) {
+              // Player is within the radius of the coin
+              collectedCoins.push(index);
+            }
+          });
+
+          // Process collected coins
+          if (collectedCoins.length > 0) {
+            collectedCoins.forEach((index) => {
+              handleCoinCollected(result, index);
+            });
+          }
+
           player.x = Math.max(-WORLD_WIDTH, Math.min(WORLD_WIDTH, player.x));
           player.y = Math.max(-WORLD_HEIGHT, Math.min(WORLD_HEIGHT, player.y));
 
@@ -350,4 +372,4 @@ setInterval(() => {
   rooms.forEach((room) => {
     sendBatchedMessages(room);
   });
-}, 20); // 2000 milliseconds (adjust as needed)
+}, 10); // 20 milliseconds (adjust as needed)
