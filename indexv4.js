@@ -10,19 +10,19 @@ const rooms = new Map();
 let nextPlayerId = 1;
 
 function createRateLimiter() {
-  const rate = 120;
-  const burst = 60;
+  const rate = 30;
+  //const burst = 60;
   return new Limiter({
     tokensPerInterval: rate,
     interval: "sec",
-    maxBurst: burst,
+    //maxBurst: burst,
   });
 }
 
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
-const playerspeed = 8;
-const inputThrottleInterval = 20;
+const playerspeed = 16;
+//const inputThrottleInterval = 20;
 
 // Add a global variable to store batched messages
 const batchedMessages = new Map();
@@ -228,42 +228,35 @@ function addToBatch(room, messages) {
 function handleRequest(result, message) {
   try {
     const data = JSON.parse(message);
-    if (
-      data.type === "movement" &&
-      ["left", "right", "up", "down"].includes(data.direction)
-    ) {
-      const player = result.room.players.get(result.playerId);
-      if (player) {
-        const currentTimestamp = Date.now();
+    if (data.type === "movement" && typeof data.direction === "number") {
+      // Ensure the direction is within the range of -180 to 180 degrees
+      const validDirection =
+        data.direction >= -180 && data.direction <= 180
+          ? data.direction
+          : NaN;
 
-        if (
-          currentTimestamp - player.lastProcessedTimestamps[data.direction] >
-          inputThrottleInterval
-        ) {
-          //player.direction = data.direction;
+      if (!isNaN(validDirection)) {
+        const player = result.room.players.get(result.playerId);
+        if (player) {
+          const currentTimestamp = Date.now();
 
-          switch (data.direction) {
-            case "left":
-              player.direction = 90;
-              player.x -= playerspeed;
-              break;
-            case "right":
-              player.direction = -90;
-              player.x += playerspeed;
-              break;
-            case "up":
-              player.y -= playerspeed;
-              break;
-            case "down":
-              player.y += playerspeed;
-              break;
-          }
+          // Adjust the direction so that right is 90, left is -90, up is 0, and down is 180
+          const finalDirection = validDirection - 90;
+
+          // Calculate the x and y components based on the adjusted direction angle
+          const radians = (finalDirection * Math.PI) / 180;
+          const xDelta = playerspeed * Math.cos(radians);
+          const yDelta = playerspeed * Math.sin(radians);
+
+          // Update player position based on the calculated deltas
+          player.x += xDelta;
+          player.y += yDelta;
 
           // Check if the player is within the radius of any coin
           const collectedCoins = [];
           result.room.coins.forEach((coin, index) => {
             const distance = Math.sqrt(
-              Math.pow(player.x - coin.x, 2) + Math.pow(player.y - coin.y, 2),
+              Math.pow(player.x - coin.x, 2) + Math.pow(player.y - coin.y, 2)
             );
 
             if (distance <= 60) {
@@ -282,36 +275,23 @@ function handleRequest(result, message) {
           player.x = Math.max(-WORLD_WIDTH, Math.min(WORLD_WIDTH, player.x));
           player.y = Math.max(-WORLD_HEIGHT, Math.min(WORLD_HEIGHT, player.y));
 
-          player.prevX =
-            player.x -
-            (data.direction === "left"
-              ? playerspeed
-              : data.direction === "right"
-                ? -playerspeed
-                : 0);
-          player.prevY =
-            player.y -
-            (data.direction === "up"
-              ? playerspeed
-              : data.direction === "down"
-                ? -playerspeed
-                : 0);
-
+          // Broadcast player positions and new coins in a single message
           const messages = Array.from(result.room.players.keys()).map(
             (playerId) => ({
               type: "movement",
               x: result.room.players.get(playerId).x,
               y: result.room.players.get(playerId).y,
               playerId: playerId,
-            }),
+            })
           );
           messages.push({ type: "coins", coins: result.room.coins });
 
-          // Broadcast player positions and new coins in a single message
           addToBatch(result.room, messages);
 
-          player.lastProcessedTimestamps[data.direction] = currentTimestamp;
+          player.lastProcessedTimestamps[finalDirection] = currentTimestamp;
         }
+      } else {
+        console.warn("Invalid direction value:", data.direction);
       }
     }
   } catch (error) {
@@ -372,4 +352,4 @@ setInterval(() => {
   rooms.forEach((room) => {
     sendBatchedMessages(room);
   });
-}, 10); // 20 milliseconds (adjust as needed)
+}, 33); // 20 milliseconds (adjust as needed)
