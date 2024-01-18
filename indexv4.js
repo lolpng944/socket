@@ -10,7 +10,7 @@ const rooms = new Map();
 let nextPlayerId = 1;
 
 function createRateLimiter() {
-  const rate = 30;
+  const rate = 50;
   //const burst = 60;
   return new Limiter({
     tokensPerInterval: rate,
@@ -21,7 +21,7 @@ function createRateLimiter() {
 
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
-const playerspeed = 16;
+const playerspeed = 8;
 //const inputThrottleInterval = 20;
 
 // Add a global variable to store batched messages
@@ -177,12 +177,6 @@ async function joinRoom(ws, token) {
           prevY: 0,
           playerId: playerId,
           rateLimiter: playerRateLimiter,
-          lastProcessedTimestamps: {
-            left: 0,
-            right: 0,
-            up: 0,
-            down: 0,
-          },
         });
 
         resolve({ roomId, playerId, room });
@@ -240,6 +234,8 @@ function handleRequest(result, message) {
         if (player) {
           const currentTimestamp = Date.now();
 
+          player.direction = validDirection > 0 ? 90 : -90;
+
           // Adjust the direction so that right is 90, left is -90, up is 0, and down is 180
           const finalDirection = validDirection - 90;
 
@@ -249,8 +245,8 @@ function handleRequest(result, message) {
           const yDelta = playerspeed * Math.sin(radians);
 
           // Update player position based on the calculated deltas
-          player.x += xDelta;
-          player.y += yDelta;
+          player.x = Math.round(player.x + xDelta);
+          player.y = Math.round(player.y + yDelta);
 
           // Check if the player is within the radius of any coin
           const collectedCoins = [];
@@ -282,13 +278,14 @@ function handleRequest(result, message) {
               x: result.room.players.get(playerId).x,
               y: result.room.players.get(playerId).y,
               playerId: playerId,
+              direction: player.direction,
             })
           );
           messages.push({ type: "coins", coins: result.room.coins });
 
           addToBatch(result.room, messages);
 
-          player.lastProcessedTimestamps[finalDirection] = currentTimestamp;
+          //player.lastProcessedTimestamps[finalDirection] = currentTimestamp;
         }
       } else {
         console.warn("Invalid direction value:", data.direction);
@@ -352,4 +349,4 @@ setInterval(() => {
   rooms.forEach((room) => {
     sendBatchedMessages(room);
   });
-}, 33); // 20 milliseconds (adjust as needed)
+}, 20); // 20 milliseconds (adjust as needed)
