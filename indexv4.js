@@ -10,18 +10,16 @@ const rooms = new Map();
 let nextPlayerId = 1;
 
 function createRateLimiter() {
-  const rate = 50;
-  //const burst = 60;
+  const rate = 1; // Allow one request every 50 milliseconds
   return new Limiter({
     tokensPerInterval: rate,
-    interval: "sec",
-    //maxBurst: burst,
+    interval: 25, // milliseconds
   });
 }
 
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 600;
-const playerspeed = 8;
+const playerspeed = 0.5;
 //const inputThrottleInterval = 20;
 
 // Add a global variable to store batched messages
@@ -45,6 +43,8 @@ function sendBatchedMessages(room) {
           x: player.x,
           y: player.y,
           direction: player.direction,
+          hat: player.hat,
+          top: player.top,
         };
         return acc;
       },
@@ -104,6 +104,8 @@ function handleCoinCollected(result, index) {
     y: room.players.get(playerId).y,
     playerId: playerId,
     direction: room.players.get(playerId).direction,
+    hat: room.players.get(playerId).hat,
+    top: room.players.get(playerId).top,
   }));
   messages.push({ type: "coins", coins: room.coins });
   messages.push({ type: "coin_collected", coinIndex: index }, playerId);
@@ -129,6 +131,9 @@ function generateRandomCoins(room) {
       x: room.players.get(playerId).x,
       y: room.players.get(playerId).y,
       playerId: playerId,
+      direction: room.players.get(playerId).direction,
+      hat: room.players.get(playerId).hat,
+      top: room.players.get(playerId).top,
     })),
     { type: "coins", coins: room.coins },
   ];
@@ -167,6 +172,8 @@ async function joinRoom(ws, token) {
         }
 
         const playerId = response.data.message;
+        const hat = response.data.hat;
+        const top = response.data.top;
         const playerRateLimiter = createRateLimiter(); // Create a rate limiter for each player
         room.players.set(playerId, {
           ws,
@@ -175,8 +182,11 @@ async function joinRoom(ws, token) {
           direction: null,
           prevX: 0,
           prevY: 0,
+          lastProcessedPosition: 0,
           playerId: playerId,
           rateLimiter: playerRateLimiter,
+          hat: hat,
+          top: top,
         });
 
         resolve({ roomId, playerId, room });
@@ -225,14 +235,13 @@ function handleRequest(result, message) {
     if (data.type === "movement" && typeof data.direction === "number") {
       // Ensure the direction is within the range of -180 to 180 degrees
       const validDirection =
-        data.direction >= -180 && data.direction <= 180
-          ? data.direction
-          : NaN;
+        data.direction >= -180 && data.direction <= 180 ? data.direction : NaN;
 
       if (!isNaN(validDirection)) {
         const player = result.room.players.get(result.playerId);
         if (player) {
-          const currentTimestamp = Date.now();
+          // Calculate delta time only when the player changes position
+          const deltaTime = player.lastProcessedPosition !== undefined ? 20 : 0;
 
           player.direction = validDirection > 0 ? 90 : -90;
 
@@ -241,8 +250,8 @@ function handleRequest(result, message) {
 
           // Calculate the x and y components based on the adjusted direction angle
           const radians = (finalDirection * Math.PI) / 180;
-          const xDelta = playerspeed * Math.cos(radians);
-          const yDelta = playerspeed * Math.sin(radians);
+          const xDelta = playerspeed * deltaTime * Math.cos(radians);
+          const yDelta = playerspeed * deltaTime * Math.sin(radians);
 
           // Update player position based on the calculated deltas
           player.x = Math.round(player.x + xDelta);
@@ -252,7 +261,7 @@ function handleRequest(result, message) {
           const collectedCoins = [];
           result.room.coins.forEach((coin, index) => {
             const distance = Math.sqrt(
-              Math.pow(player.x - coin.x, 2) + Math.pow(player.y - coin.y, 2)
+              Math.pow(player.x - coin.x, 2) + Math.pow(player.y - coin.y, 2),
             );
 
             if (distance <= 60) {
@@ -279,13 +288,15 @@ function handleRequest(result, message) {
               y: result.room.players.get(playerId).y,
               playerId: playerId,
               direction: player.direction,
-            })
+              hat: player.hat,
+              top: player.top,
+            }),
           );
           messages.push({ type: "coins", coins: result.room.coins });
 
           addToBatch(result.room, messages);
 
-          //player.lastProcessedTimestamps[finalDirection] = currentTimestamp;
+          player.lastProcessedPosition = { x: player.x, y: player.y };
         }
       } else {
         console.warn("Invalid direction value:", data.direction);
@@ -310,10 +321,6 @@ wss.on("connection", (ws, req) => {
             const player = result.room.players.get(result.playerId);
             if (player.rateLimiter.tryRemoveTokens(1)) {
               handleRequest(result, message);
-            } else {
-              console.log(
-                "Player rate-limited. Too many actions in a short period.",
-              );
             }
           } else {
             console.log("Player not found in the room.");
@@ -349,4 +356,4 @@ setInterval(() => {
   rooms.forEach((room) => {
     sendBatchedMessages(room);
   });
-}, 20); // 20 milliseconds (adjust as needed)
+}, 25); // 20 milliseconds (adjust as needed)
