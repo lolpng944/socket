@@ -45,6 +45,9 @@ function sendBatchedMessages(room) {
           direction: player.direction,
           hat: player.hat,
           top: player.top,
+          player_color: player.player_color,
+          hat_color: player.hat_color,
+          top_color: player.top_color,
         };
         return acc;
       },
@@ -106,6 +109,9 @@ function handleCoinCollected(result, index) {
     direction: room.players.get(playerId).direction,
     hat: room.players.get(playerId).hat,
     top: room.players.get(playerId).top,
+    player_color: room.players.get(playerId).player_color,
+    hat_color: room.players.get(playerId).hat_color,
+    top_color: room.players.get(playerId).top_color,
   }));
   messages.push({ type: "coins", coins: room.coins });
   messages.push({ type: "coin_collected", coinIndex: index }, playerId);
@@ -134,6 +140,9 @@ function generateRandomCoins(room) {
       direction: room.players.get(playerId).direction,
       hat: room.players.get(playerId).hat,
       top: room.players.get(playerId).top,
+      player_color: room.players.get(playerId).player_color,
+      hat_color: room.players.get(playerId).hat_color,
+      top_color: room.players.get(playerId).top_color,
     })),
     { type: "coins", coins: room.coins },
   ];
@@ -174,6 +183,9 @@ async function joinRoom(ws, token) {
         const playerId = response.data.message;
         const hat = response.data.hat;
         const top = response.data.top;
+        const player_color = response.data.player_color;
+        const hat_color = response.data.hat_color
+        const top_color = response.data.top_color
         const playerRateLimiter = createRateLimiter(); // Create a rate limiter for each player
         room.players.set(playerId, {
           ws,
@@ -187,6 +199,9 @@ async function joinRoom(ws, token) {
           rateLimiter: playerRateLimiter,
           hat: hat,
           top: top,
+          player_color: player_color,
+          hat_color: hat_color,
+          top_color: top_color,
         });
 
         resolve({ roomId, playerId, room });
@@ -243,7 +258,7 @@ function handleRequest(result, message) {
           // Calculate delta time only when the player changes position
           const deltaTime = player.lastProcessedPosition !== undefined ? 20 : 0;
 
-          player.direction = validDirection > 0 ? 90 : -90;
+          player.direction = validDirection > 0 ? -90 : 90;
 
           // Adjust the direction so that right is 90, left is -90, up is 0, and down is 180
           const finalDirection = validDirection - 90;
@@ -290,6 +305,9 @@ function handleRequest(result, message) {
               direction: player.direction,
               hat: player.hat,
               top: player.top,
+              player_color: player.player_color,
+              hat_color: player.hat_color,
+              top_color: player.top_color,
             }),
           );
           messages.push({ type: "coins", coins: result.room.coins });
@@ -356,4 +374,4 @@ setInterval(() => {
   rooms.forEach((room) => {
     sendBatchedMessages(room);
   });
-}, 25); // 20 milliseconds (adjust as needed)
+}, 25);
